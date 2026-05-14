@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+python-multipart
+pdfplumber
+pandas
+pymongo
+python-dotenv
+httpx
+langchain
+langgraph
+langchain-google-vertexai
