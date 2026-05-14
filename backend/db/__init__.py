@@ -29,5 +29,9 @@ def _connect_to_mongodb() -> None:
     action_logs = db["action_logs"]
     pipeline_status = db["pipeline_status"]
 
+    # Confirm connection
+    client.admin.command("ping")
+    print(f"Connected to MongoDB — database: {MONGODB_DB_NAME}")
+
 
 _connect_to_mongodb()
