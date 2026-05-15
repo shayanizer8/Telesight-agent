@@ -169,7 +169,8 @@ def contradiction_node(state: PipelineState) -> PipelineState:
         article_text = (state.get("article_text") or "").lower()
         pdf_text = (state.get("pdf_text") or "").lower()
         positive_keywords = ["satisfaction", "improved", "improvement", "positive", "growth", "stronger"]
-        article_keyword_hit = any(keyword in article_text for keyword in positive_keywords)
+        article_source_available = bool(article_text)
+        article_keyword_hit = any(keyword in article_text for keyword in positive_keywords) if article_source_available else False
         pdf_keyword_hit = any(keyword in pdf_text for keyword in positive_keywords)
 
         high_risk_customers = sum(
@@ -194,6 +195,7 @@ def contradiction_node(state: PipelineState) -> PipelineState:
             "conflict_description": conflict_description,
             "csv_credibility_score": 0.91,
             "article_credibility_score": 0.54,
+            "article_source_available": article_source_available,
             "resolution_path": resolution_path,
         }
     except Exception as exc:
@@ -203,6 +205,7 @@ def contradiction_node(state: PipelineState) -> PipelineState:
             "conflict_description": "Contradiction analysis unavailable.",
             "csv_credibility_score": 0.91,
             "article_credibility_score": 0.54,
+            "article_source_available": bool((state.get("article_text") or "")),
             "resolution_path": "Re-run analysis after data validation.",
         }
 
