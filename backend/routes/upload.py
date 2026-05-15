@@ -6,7 +6,8 @@ from typing import Optional
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
-from db import pipeline_status
+from db import customers, pipeline_status
+from agents.pipeline import run_pipeline
 from parsers.article_parser import parse_article
 from parsers.csv_parser import parse_csv
 from parsers.feed_parser import generate_live_feed
@@ -37,6 +38,26 @@ def _serialize_document(document: dict) -> dict:
     if "_id" in serialized:
         serialized["_id"] = str(serialized["_id"])
     return serialized
+
+
+def _serialize_pipeline_status_metadata(document: dict) -> dict:
+    ingested_data = document.get("ingested_data", {})
+    json_data = ingested_data.get("json_data", {})
+    return {
+        "run_id": document.get("run_id"),
+        "status": document.get("status"),
+        "current_step": document.get("current_step"),
+        "steps_completed": document.get("steps_completed", []),
+        "steps_pending": document.get("steps_pending", []),
+        "ingested_data": {
+            "csv_records_count": ingested_data.get("csv_records_count", 0),
+            "pdf_text_length": len(ingested_data.get("pdf_text", "") or ""),
+            "json_data_keys_count": len(json_data) if isinstance(json_data, dict) else 0,
+            "article_text_length": ingested_data.get("article_text_length", 0),
+            "live_feed_event_count": 1 if ingested_data.get("live_feed_event") else 0,
+        },
+        "created_at": document.get("created_at"),
+    }
 
 
 @router.post("/upload")
@@ -77,6 +98,10 @@ async def upload_pipeline_data(
         live_feed_event = generate_live_feed()
         run_id = str(uuid.uuid4())
         created_at = datetime.now(timezone.utc)
+        csv_records_with_run_id = [dict(record, run_id=run_id) for record in csv_records]
+
+        if customers is not None and csv_records_with_run_id:
+            customers.insert_many(csv_records_with_run_id)
 
         pipeline_document = {
             "run_id": run_id,
@@ -85,7 +110,8 @@ async def upload_pipeline_data(
             "steps_completed": ["ingest"],
             "steps_pending": ["temporal", "contradiction", "insight", "action"],
             "ingested_data": {
-                "csv_records": len(csv_records),
+                "csv_records_count": len(csv_records),
+                "pdf_text": pdf_text,
                 "pdf_text_length": len(pdf_text),
                 "json_data": json_data,
                 "article_text_length": article_text_length,
@@ -116,9 +142,47 @@ def get_pipeline_status(run_id: str) -> dict:
     if document is None:
         raise HTTPException(status_code=404, detail=f"Pipeline run '{run_id}' not found.")
 
-    return _serialize_document(document)
+    return _serialize_pipeline_status_metadata(document)
 
 
 @router.get("/feed/live")
 def get_live_feed() -> dict:
     return generate_live_feed()
+
+
+@router.post("/pipeline/run/{run_id}")
+def run_pipeline_test(run_id: str) -> dict:
+    if pipeline_status is None:
+        raise HTTPException(status_code=500, detail="MongoDB is not configured. Set MONGODB_URI in .env.")
+
+    document = pipeline_status.find_one({"run_id": run_id})
+    if document is None:
+        raise HTTPException(status_code=404, detail=f"Pipeline run '{run_id}' not found.")
+
+    ingested_data = document.get("ingested_data", {})
+
+    csv_records = []
+    stored_csv_records = ingested_data.get("csv_records")
+    if isinstance(stored_csv_records, list) and stored_csv_records:
+        csv_records = stored_csv_records
+    elif customers is not None:
+        csv_records = list(customers.find({"run_id": run_id}, {"_id": 0}))
+
+    state_data = {
+        "csv_records": csv_records,
+        "pdf_text": ingested_data.get("pdf_text", ""),
+        "json_data": ingested_data.get("json_data", {}),
+        "article_text": "",
+        "live_feed_event": ingested_data.get("live_feed_event", {}),
+        "temporal_analysis": {},
+        "contradiction_report": {},
+        "insight_report": {},
+        "action_plan": {},
+        "errors": [],
+    }
+
+    final_state = run_pipeline(run_id, state_data)
+    response_state = dict(final_state)
+    response_state.pop("csv_records", None)
+    response_state["csv_records_count"] = len(csv_records)
+    return response_state
