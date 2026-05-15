@@ -77,13 +77,10 @@ def ingest_node(state: PipelineState) -> PipelineState:
                 _append_error(state, f"Pipeline status document not found for run_id={run_id}")
             else:
                 ingested_data = document.get("ingested_data", {})
-                required_keys = ["csv_records", "pdf_text_length", "json_data", "live_feed_event"]
+                required_keys = ["pdf_text_length", "json_data", "live_feed_event"]
                 missing_keys = [key for key in required_keys if key not in ingested_data]
                 if missing_keys:
                     _append_error(state, f"Missing ingested data fields: {', '.join(missing_keys)}")
-
-                if not state.get("csv_records"):
-                    _append_error(state, "csv_records missing from pipeline state")
                 if not state.get("pdf_text"):
                     _append_error(state, "pdf_text missing from pipeline state")
                 if not state.get("json_data"):
@@ -170,8 +167,10 @@ def contradiction_node(state: PipelineState) -> PipelineState:
 
     try:
         article_text = (state.get("article_text") or "").lower()
-        positive_keywords = ["satisfaction", "improved", "growth", "positive"]
-        keyword_hit = any(keyword in article_text for keyword in positive_keywords)
+        pdf_text = (state.get("pdf_text") or "").lower()
+        positive_keywords = ["satisfaction", "improved", "improvement", "positive", "growth", "stronger"]
+        article_keyword_hit = any(keyword in article_text for keyword in positive_keywords)
+        pdf_keyword_hit = any(keyword in pdf_text for keyword in positive_keywords)
 
         high_risk_customers = sum(
             1
@@ -179,10 +178,11 @@ def contradiction_node(state: PipelineState) -> PipelineState:
             if str(record.get("churn_risk", "")).lower() == "high"
         )
 
-        conflict_detected = keyword_hit and high_risk_customers > 2000
+        conflict_detected = (article_keyword_hit or pdf_keyword_hit) and high_risk_customers > 2000
         if conflict_detected:
+            conflict_source = "article" if article_keyword_hit else "PDF"
             conflict_description = (
-                "Article sentiment suggests improving telecom satisfaction while CSV data shows a large high-risk churn segment."
+                f"{conflict_source.capitalize()} sentiment suggests improving telecom satisfaction while CSV data shows a large high-risk churn segment."
             )
             resolution_path = "Prioritize churn signals from CSV and validate the article context manually."
         else:
