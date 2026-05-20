@@ -259,6 +259,23 @@ def run_pipeline_endpoint(run_id: str) -> dict:
     }
 
     final_state = run_pipeline(run_id, state_data)
+
+    # Persist the generated analysis reports back to pipeline_status in MongoDB
+    pipeline_status.update_one(
+        {"run_id": run_id},
+        {
+            "$set": {
+                "temporal_analysis": final_state.get("temporal_analysis", {}),
+                "contradiction_report": final_state.get("contradiction_report", {}),
+                "insight_report": final_state.get("insight_report", {}),
+                "action_plan": final_state.get("action_plan", {}),
+                "steps_completed": ["ingest", "temporal", "contradiction", "insight", "action"],
+                "steps_pending": [],
+                "errors": final_state.get("errors", []),
+            }
+        }
+    )
+
     response_state = dict(final_state)
     response_state.pop("csv_records", None)
     response_state["csv_records_count"] = len(csv_records)
