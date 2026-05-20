@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from routes import router
 from routes.mock_apis import router as mock_apis_router
+from routes.actions import router as actions_router
 
 app = FastAPI(title="TeleSight API")
 
@@ -15,6 +16,7 @@ app.add_middleware(
 )
 
 app.include_router(router, prefix="/api")
+app.include_router(actions_router, prefix="/api")
 app.include_router(mock_apis_router, prefix="/mock-api")
 
 
