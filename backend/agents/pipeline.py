@@ -2,12 +2,42 @@ import logging
 import math
 from collections import Counter
 from typing import Any, Dict, List, Optional, TypedDict
+import os
+from dotenv import load_dotenv
 
 from langgraph.graph import END, StateGraph
 
 from db import pipeline_status
+from langchain_google_vertexai import ChatVertexAI
+from langchain_core.messages import HumanMessage
+
+load_dotenv()
 
 logger = logging.getLogger(__name__)
+
+# Initialize Gemini once at module level
+llm = None
+try:
+    llm = ChatVertexAI(
+        model_name="gemini-2.5-flash",
+        project=os.getenv("GOOGLE_PROJECT_ID"),
+        location=os.getenv("GOOGLE_LOCATION"),
+        temperature=0.3
+    )
+except Exception as e:
+    logger.warning("Gemini unavailable, running in rule-based mode")
+    llm = None
+
+
+def call_gemini(prompt: str) -> str:
+    if llm is None:
+        return ""
+    try:
+        response = llm.invoke([HumanMessage(content=prompt)])
+        return str(response.content)
+    except Exception as e:
+        logger.error("Error calling Gemini: %s", e)
+        return ""
 
 
 class PipelineState(TypedDict):
@@ -190,6 +220,29 @@ def contradiction_node(state: PipelineState) -> PipelineState:
             conflict_description = "No material contradiction detected across article, survey, and churn signals."
             resolution_path = "Continue monitoring all sources for alignment."
 
+        gemini_explanation = ""
+        if conflict_detected:
+            insight_count = high_risk_customers
+            # Ensure csv_records_count is set in state if not present to prevent key errors
+            if "csv_records_count" not in state:
+                state["csv_records_count"] = len(state.get("csv_records", []))
+            
+            prompt = f"""You are a telecom analyst. Two data sources 
+   conflict:
+
+   Source 1 (Internal CSV - credibility 0.91): 
+   {state['csv_records_count']} customers analyzed. 
+   {insight_count} are high churn risk.
+   
+   Source 2 (PDF Report - credibility 0.54): 
+   "{state['pdf_text'][:500]}"
+
+   In 2-3 sentences explain this contradiction 
+   and suggest one specific investigation step 
+   a Telenor analyst should take to resolve it.
+   Be specific to Pakistani telecom context."""
+            gemini_explanation = call_gemini(prompt)
+
         state["contradiction_report"] = {
             "conflict_detected": conflict_detected,
             "conflict_description": conflict_description,
@@ -197,6 +250,7 @@ def contradiction_node(state: PipelineState) -> PipelineState:
             "article_credibility_score": 0.54,
             "article_source_available": article_source_available,
             "resolution_path": resolution_path,
+            "gemini_explanation": gemini_explanation,
         }
     except Exception as exc:
         _append_error(state, f"Contradiction analysis failed: {exc}")
@@ -207,6 +261,7 @@ def contradiction_node(state: PipelineState) -> PipelineState:
             "article_credibility_score": 0.54,
             "article_source_available": bool((state.get("article_text") or "")),
             "resolution_path": "Re-run analysis after data validation.",
+            "gemini_explanation": "",
         }
 
     return state
@@ -248,6 +303,42 @@ def insight_node(state: PipelineState) -> PipelineState:
         else:
             primary_churn_signal = "usage_decline"
 
+        # Prepare variables for Gemini prompt
+        total_high_risk = total_high_risk_customers
+        projected_loss = projected_revenue_loss_pkr
+        primary_signal = primary_churn_signal
+        
+        # Calculate highest_region
+        highest_region = state.get("temporal_analysis", {}).get("highest_risk_region", "unknown")
+        if highest_region == "unknown" and high_risk_by_region:
+            highest_region = max(high_risk_by_region, key=high_risk_by_region.get)
+            
+        avg_days = avg_days_no_recharge
+        avg_complaints = avg_complaints
+        trend = state.get("temporal_analysis", {}).get("trend", "stable")
+
+        insight_prompt = f"""You are a senior telecom analyst for Telenor 
+   Pakistan. Here is the churn analysis for 
+   Lahore region, April 2026:
+
+   - High risk customers: {total_high_risk}
+   - Projected revenue loss: PKR {projected_loss:,.0f}
+   - Primary churn signal: {primary_signal}
+   - Highest risk region: {highest_region}
+   - Average days without recharge: {avg_days:.1f}
+   - Average complaints per customer: {avg_complaints:.1f}
+   - Trend: {trend}
+   
+   External context: {state.get('article_text', '')[:300]}
+   
+   In 3-4 sentences provide a sharp business insight 
+   explaining why this churn is happening and what 
+   the most effective retention action would be.
+   Be specific, actionable, and reference Pakistani 
+   telecom market conditions where relevant."""
+
+        gemini_insight = call_gemini(insight_prompt)
+
         state["insight_report"] = {
             "total_high_risk_customers": total_high_risk_customers,
             "high_risk_by_region": high_risk_by_region,
@@ -256,6 +347,7 @@ def insight_node(state: PipelineState) -> PipelineState:
             "projected_revenue_loss_pkr": projected_revenue_loss_pkr,
             "primary_churn_signal": primary_churn_signal,
             "severity": severity,
+            "gemini_insight": gemini_insight,
         }
     except Exception as exc:
         _append_error(state, f"Insight generation failed: {exc}")
@@ -267,6 +359,7 @@ def insight_node(state: PipelineState) -> PipelineState:
             "projected_revenue_loss_pkr": 0.0,
             "primary_churn_signal": "usage_decline",
             "severity": "medium",
+            "gemini_insight": "",
         }
 
     return state
@@ -330,6 +423,90 @@ def action_node(state: PipelineState) -> PipelineState:
             ],
         }
 
+        # Prepare variables for Gemini prompt
+        max_sms = max_sms_affordable
+        budget = budget_pkr
+        rate_limit = sms_rate_limit_per_hour
+        batches = batches_needed
+        primary_signal = state.get("insight_report", {}).get("primary_churn_signal", "usage_decline")
+
+        action_prompt = f"""You are a telecom retention specialist for 
+   Telenor Pakistan. The AI agent has decided to 
+   take the following actions:
+
+   - Target: {max_sms} high-risk customers via SMS
+   - Budget: PKR {budget:,}
+   - Rate limit: {rate_limit} SMS per hour
+   - Batches needed: {batches}
+   - Primary churn signal: {primary_signal}
+
+   Write a personalized SMS message (max 160 chars) 
+   for a Pakistani prepaid customer who has not 
+   recharged in over 30 days and whose data usage 
+   has dropped significantly. The message should 
+   feel personal, offer a specific incentive, and 
+   be in simple English that works for Pakistani 
+   audience.
+
+   Provide your response starting with:
+   SMS Message: "your SMS message text here"
+   """
+
+        gemini_response = call_gemini(action_prompt)
+        gemini_sms_template = ""
+        
+        if gemini_response:
+            # Extract only the actual SMS message text from the response.
+            # Extract just the text between the first pair of quotes that appears after "SMS Message:" in the response.
+            sms_text = ""
+            locator = "SMS Message:"
+            idx = gemini_response.lower().find(locator.lower())
+            if idx != -1:
+                after_locator = gemini_response[idx + len(locator):]
+                # Find first quote character
+                first_quote_idx = -1
+                quote_char = None
+                for i, char in enumerate(after_locator):
+                    if char in ('"', "'", '“', '”', '‘', '’'):
+                        first_quote_idx = i
+                        quote_char = char
+                        matching_quote_char = '”' if quote_char == '“' else ('’' if quote_char == '‘' else quote_char)
+                        break
+                
+                if first_quote_idx != -1:
+                    remaining_text = after_locator[first_quote_idx + 1:]
+                    second_quote_idx = remaining_text.find(matching_quote_char)
+                    if second_quote_idx == -1:
+                        # try matching other closing quote types
+                        for c in ('"', "'", '”', '’'):
+                            second_quote_idx = remaining_text.find(c)
+                            if second_quote_idx != -1:
+                                break
+                    if second_quote_idx != -1:
+                        sms_text = remaining_text[:second_quote_idx].strip()
+            
+            if sms_text:
+                gemini_sms_template = sms_text
+            else:
+                gemini_sms_template = (
+                    "Hey! We noticed you haven't recharged your Telenor number recently. "
+                    "Recharge PKR 100+ & get 5GB FREE data for 3 days! -Telenor Pakistan"
+                )
+
+        state["action_plan"]["gemini_sms_template"] = gemini_sms_template
+
+        # Update the sms_template in the campaigns collection if a campaign exists for this run_id
+        if gemini_sms_template:
+            try:
+                from db import campaigns
+                if campaigns is not None:
+                    campaigns.update_one(
+                        {"run_id": run_id},
+                        {"$set": {"sms_template": gemini_sms_template}}
+                    )
+            except Exception as db_exc:
+                logger.warning("Failed to update sms_template in campaigns for run_id %s: %s", run_id, db_exc)
+
         _safe_update_pipeline_status(run_id, state, status="ready_for_execution", current_step="action")
     except Exception as exc:
         _append_error(state, f"Action planning failed: {exc}")
@@ -342,6 +519,7 @@ def action_node(state: PipelineState) -> PipelineState:
                 "time_to_complete_hours": 0.0,
             },
             "actions": [],
+            "gemini_sms_template": "",
         }
 
     return state

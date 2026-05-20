@@ -156,7 +156,9 @@ def execute_actions(run_id: str) -> dict:
         {"$set": {"current_step": "executing_action_4"}},
     )
 
+    gemini_sms_template = action_plan.get("gemini_sms_template", "")
     sms_template = (
+        gemini_sms_template if gemini_sms_template else
         "Dear valued Telenor customer, we noticed you haven't recharged recently. "
         "Recharge today and get 3GB bonus data free. Valid for 7 days. Reply STOP to opt out."
     )
