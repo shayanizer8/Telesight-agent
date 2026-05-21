@@ -46,7 +46,7 @@ Outcome stored in MongoDB
 | Backend API | FastAPI (Python) |
 | File Parsing | pdfplumber + pandas |
 | Database | MongoDB Atlas |
-| Mobile App | (not built yet) |
+| Mobile App | (Not built yet) |
 
 ---
 
@@ -236,7 +236,7 @@ TeleSight/
 │   │   └── actions.py           # Action execution + logs endpoints
 │   └── db/
 │       └── __init__.py          # MongoDB Atlas connection
-├── frontend/                    # Flutter (Not built yet)
+├── frontend/                    # (Not built yet)
 └── data/
     ├── churn_data.csv           # Mock dataset — 5,000 customers
     ├── kpi_dashboard.json       # Mock KPI snapshot
@@ -355,7 +355,7 @@ plan_type, account_age_months, churn_risk
 
 ## Assumptions & Limitations
 
-- All churn data is mock-generated. No real Telenor customer data is used.
+- All churn data is mock-generated. No real customer data is used.
 - CRM failure in Action 3 is deliberately injected for demonstration purposes.
 - SMS campaign is simulated via MongoDB writes — no real SMS gateway is connected.
 - Manager notification is simulated — no real email or Slack integration.
